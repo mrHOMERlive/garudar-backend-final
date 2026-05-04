@@ -1,0 +1,48 @@
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Env files (будут монтироваться отдельно)
+.env
+.env.*
+
+# Tests
+tests/
+pytest_cache/
+.pytest_cache/
+.playwright-mcp
+
+# Logs
+*.log
+logs/
+
+# Alembic versions (если нужны - убрать из игнора)
+# alembic/versions/
+
+# Misc
+*.md
+.DS_Store
+Thumbs.db

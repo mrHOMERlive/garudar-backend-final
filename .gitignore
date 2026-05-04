@@ -1,0 +1,46 @@
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.egg-info/
+dist/
+build/
+
+# Docker local overrides
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Claude Code
+.claude/
+CLAUDE.md
+.playwright-mcp/
