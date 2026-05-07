@@ -13,6 +13,7 @@ from app.schemas import NDARequestDto, NDARequestCreateDto, NDARequestUpdateDto
 from app.deps import get_current_active_user
 from app.enums import NDAStatus
 from app.s3_client import get_s3_client, S3Client
+from app.file_validators import validate_pdf_not_encrypted
 
 router = APIRouter(tags=["NDA"])
 
@@ -243,6 +244,10 @@ async def upload_file(
     max_size = 50 * 1024 * 1024  # 50 MB
     if file_size > max_size:
         raise HTTPException(status_code=400, detail="File size exceeds 50 MB limit")
+
+    # ТЗ Sec 5.5.3: парольно-защищённые PDF не принимаем —
+    # staff не сможет открыть подписанный NDA.
+    await validate_pdf_not_encrypted(file_content, file.filename)
 
     # Определяем client_id автоматически, если не передан
     cid = client_id

@@ -2,7 +2,6 @@
 Роутер для управления документами POBO
 Строгий контроль доступа, последовательности и immutability
 """
-import asyncio
 from datetime import datetime
 from typing import Optional
 import json
@@ -13,14 +12,13 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from PyPDF2 import PdfReader
-
 from app.db import get_db
 from app.models import User, OrderPobo, OrderDocument, Client, Role, AuditLog, AppSetting
 from app.schemas import OrderDocumentDto, DocumentUploadResponse, PresignedUrlResponse, ErrorResponse
 from app.deps import get_current_active_user
 from app.enums import DocumentType, DocumentSequence, AllowedDocTypes
 from app.s3_client import get_s3_client, generate_s3_key, S3Client
+from app.file_validators import validate_pdf_not_encrypted
 
 router = APIRouter(tags=["Documents"])
 
@@ -208,34 +206,6 @@ async def validate_file_size(file: UploadFile, max_mb: int):
     return size
 
 
-async def validate_pdf_encryption(file: UploadFile):
-    """
-    Проверить что PDF не зашифрован паролем
-    
-    Raises:
-        HTTPException: 400 если PDF зашифрован
-    """
-    if not file.filename.lower().endswith(".pdf"):
-        return
-    
-    try:
-        content = await file.read()
-        await file.seek(0)
-        
-        pdf_reader = await asyncio.to_thread(PdfReader, BytesIO(content))
-        
-        if pdf_reader.is_encrypted:
-            raise HTTPException(
-                status_code=400,
-                detail="Password-protected PDF files are not allowed"
-            )
-    except HTTPException:
-        raise
-    except Exception:
-        # Если не удалось прочитать PDF - пропускаем проверку
-        pass
-
-
 async def log_document_audit(
     db: AsyncSession,
     doc_id: int,
@@ -315,13 +285,17 @@ async def upload_document(
     max_mb = await get_max_upload_size_mb(db)
     content_type = validate_file_format(file.filename)
     file_size = await validate_file_size(file, max_mb)
-    await validate_pdf_encryption(file)
+
+    # Читаем bytes один раз — используем и для проверки шифрования,
+    # и для S3-загрузки. Раньше бы проверка читала из UploadFile со
+    # seek(0), теперь работаем с bytes уже из памяти.
+    file_content = await file.read()
+    await validate_pdf_not_encrypted(file_content, file.filename)
 
     # 5. Генерировать S3 ключ
     s3_key = generate_s3_key(order_id, doc_type, file.filename)
 
     # 6. Загрузить в S3
-    file_content = await file.read()
     await s3.upload_file(
         file=BytesIO(file_content),
         key=s3_key,

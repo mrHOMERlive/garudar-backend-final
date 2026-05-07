@@ -17,6 +17,7 @@ from app.deps import get_current_user
 from app.models import User, Client, OnboardingKycProfile, OnboardingKycStatusHistory, OnboardingKycUbo, OnboardingKycDocument, CustomerReport
 from app.enums import KYCStatus, KYCDocumentType
 from app.s3_client import S3Client, get_s3_client, generate_kyc_s3_key
+from app.file_validators import validate_pdf_not_encrypted
 from app.logger import setup_logger
 from app.config import settings
 from app.schemas import (
@@ -525,13 +526,17 @@ async def upload_kyc_document(
     
     file_content = await file.read()
     file_size = len(file_content)
-    
+
     max_size = 50 * 1024 * 1024
     if file_size > max_size:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Размер файла превышает максимально допустимый ({max_size // 1024 // 1024} МБ)"
         )
+
+    # ТЗ Sec 5.5.3: блокируем PDF с парольной защитой —
+    # staff не сможет их открыть для проверки KYC.
+    await validate_pdf_not_encrypted(file_content, file.filename)
     
     # Multi-file per doc_type: всегда создаём новую запись.
     # Лимит — 10 файлов на (profile_id, doc_type). Проверяем ДО загрузки в S3,
