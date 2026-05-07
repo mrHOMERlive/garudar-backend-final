@@ -14,7 +14,8 @@ from openpyxl.styles import Border, Side, Alignment, Font
 from openpyxl.utils import get_column_letter
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import User, Client, OnboardingKycProfile, OnboardingKycStatusHistory, OnboardingKycUbo, OnboardingKycDocument, CustomerReport
+from app.models import User, Client, OnboardingKycProfile, OnboardingKycStatusHistory, OnboardingKycUbo, OnboardingKycDocument, CustomerReport, AuditLog
+import json as _json
 from app.enums import KYCStatus, KYCDocumentType
 from app.s3_client import S3Client, get_s3_client, generate_kyc_s3_key
 from app.file_validators import validate_pdf_not_encrypted
@@ -289,10 +290,31 @@ async def submit_kyc(
         comment="KYC отправлен на проверку"
     )
     db.add(history)
-    
+
+    # ТЗ Sec 4.12: дублируем в глобальный audit_log, чтобы регулятор
+    # мог найти все sensitive-события через одну таблицу. История в
+    # OnboardingKycStatusHistory остаётся (domain-specific трейс),
+    # AuditLog даёт cross-entity compliance-view.
+    db.add(AuditLog(
+        entity="clients",
+        entity_id=client.client_id,
+        action="KYC_SUBMITTED",
+        old_value=_json.dumps({
+            "kyc_status": old_status,
+            "profile_id": profile.profile_id,
+        }, ensure_ascii=False),
+        new_value=_json.dumps({
+            "kyc_status": KYCStatus.SUBMITTED.value,
+            "profile_id": profile.profile_id,
+            "submitted_at": now.isoformat(),
+        }, ensure_ascii=False),
+        created_by=current_user.username,
+        created_at=now,
+    ))
+
     await db.commit()
     await db.refresh(profile)
-    
+
     return KYCSubmitResponse(
         profile_id=profile.profile_id,
         client_id=profile.client_id,
@@ -891,6 +913,31 @@ async def make_kyc_decision(
         comment=decision.comment or f"Решение: {decision.status}"
     )
     db.add(history)
+
+    # ТЗ Sec 4.12: KYC-решения должны попадать в глобальный AuditLog,
+    # а не только в OnboardingKycStatusHistory. Action включает суффикс
+    # с конкретным решением (APPROVED/REJECTED/NEEDS_FIX), чтобы
+    # compliance-офицер мог фильтровать узко через
+    # WHERE action='KYC_DECISION_REJECTED' или широко через
+    # WHERE action LIKE 'KYC_DECISION_%'.
+    db.add(AuditLog(
+        entity="clients",
+        entity_id=client.client_id,
+        action=f"KYC_DECISION_{decision.status.upper()}",
+        old_value=_json.dumps({
+            "kyc_status": old_status,
+            "profile_id": profile.profile_id,
+        }, ensure_ascii=False),
+        new_value=_json.dumps({
+            "kyc_status": decision.status,
+            "profile_id": profile.profile_id,
+            "decided_at": now.isoformat(),
+            "decided_by": current_user.user_id,
+            "comment": decision.comment,
+        }, ensure_ascii=False),
+        created_by=current_user.username,
+        created_at=now,
+    ))
 
     if decision.status == KYCStatus.APPROVED.value:
         payload = profile.payload or {}
