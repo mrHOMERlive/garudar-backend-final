@@ -143,6 +143,10 @@ class Client(Base):
     kyc_submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     kyc_decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     kyc_decided_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.user_id"), nullable=True)
+    # Админ-флаг: разрешает клиенту создавать заявки в обход проверки kyc_status='approved'.
+    # Используется для исключительных случаев (миграция legacy-клиентов, временный
+    # доступ под надзором). По умолчанию False — KYC обязателен.
+    kyc_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     nda_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default=NDAStatus.NOT_STARTED.value)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     account_status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")

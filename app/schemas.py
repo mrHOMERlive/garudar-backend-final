@@ -181,7 +181,13 @@ class UpdateClientRequest(BaseModel):
     # Account Status
     account_status: Optional[str] = Field(None, description="Статус аккаунта: 'active' или 'hold'")
     account_hold_reason: Optional[str] = Field(None, description="Причина блокировки аккаунта")
-    
+
+    # KYC override (admin only)
+    kyc_override: Optional[bool] = Field(
+        None,
+        description="Разрешить создание заявок без kyc_status='approved'. Только admin."
+    )
+
     # Additional
     description: Optional[str] = Field(None, description="Дополнительные заметки")
 
@@ -209,6 +215,7 @@ class ClientDto(BaseModel):
     kyc_submitted_at: Optional[datetime] = None
     kyc_decided_at: Optional[datetime] = None
     kyc_decided_by: Optional[str] = None
+    kyc_override: bool = Field(default=False, description="Админ-флаг: разрешает создавать заявки без KYC approved")
     nda_status: Optional[str] = None
     account_status: Optional[str] = Field(default="active", description="Статус аккаунта")
     account_hold_reason: Optional[str] = Field(None, description="Причина блокировки")

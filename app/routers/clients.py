@@ -307,7 +307,8 @@ async def update_client(
         "group_name": client.group_name,
         "description": client.description,
         "account_status": client.account_status,
-        "account_hold_reason": client.account_hold_reason
+        "account_hold_reason": client.account_hold_reason,
+        "kyc_override": client.kyc_override,
     }
     
     update_data = data.model_dump(exclude_unset=True, exclude_none=True)
@@ -371,7 +372,24 @@ async def update_client(
         created_at=datetime.utcnow()
     )
     db.add(audit_log)
-    
+
+    # Compliance-trail для KYC-override: отдельная запись с действием
+    # KYC_OVERRIDE_TOGGLE пишется только когда флаг фактически меняется,
+    # чтобы быстро находить эти события через WHERE action='KYC_OVERRIDE_TOGGLE'.
+    if "kyc_override" in update_data:
+        previous = old_value.get("kyc_override")
+        current = update_data["kyc_override"]
+        if previous != current:
+            db.add(AuditLog(
+                entity="clients",
+                entity_id=client_id,
+                action="KYC_OVERRIDE_TOGGLE",
+                old_value=json.dumps({"kyc_override": previous}, ensure_ascii=False),
+                new_value=json.dumps({"kyc_override": current}, ensure_ascii=False),
+                created_by=current_user.username,
+                created_at=datetime.utcnow(),
+            ))
+
     await db.commit()
     await db.refresh(client)
     

@@ -15,6 +15,7 @@ from openpyxl import load_workbook
 from app.db import get_db
 from app.models import User, OrderPobo, OrderStatusHistory, Client, Role, OrderPoboTerm, AuditLog, InstructionExport, InstructionExportItem, AppSetting, ExecutedOrder, PayeerAccount, TransactionReport, CustomerReport, OnboardingKycProfile
 from app.schemas import OrderPoboDto, ErrorResponse, OrderPoboTermCreateUpdateRequest, OrderPoboTermDto, ExportInstructionRequest, ExportInstructionResponse, ExecutedOrderDto, ExecutedOrderUpdateRequest, LastInstructionExportResponse
+from app.enums import KYCStatus
 from app.deps import get_current_active_user
 
 router = APIRouter(tags=["Payment Orders"])
@@ -209,7 +210,75 @@ async def create_order(
             logger.error(f"Client not found for user_id: {current_user.user_id}")
             return JSONResponse(status_code=400, content={"error": "Client not found for current user"})
         logger.info(f"Found client_id: {client.client_id}")
-    
+
+    # KYC-gate (ТЗ Sec 10.4): клиент в роли USER может создавать заявки
+    # только при kyc_status='approved' либо kyc_override=True (флаг
+    # выставляется администратором вручную для исключений).
+    # Staff/Admin при создании от имени клиента проходят без проверки.
+    if current_user.role == Role.USER.value:
+        if client.kyc_status != KYCStatus.APPROVED.value and not client.kyc_override:
+            logger.warning(
+                f"Order creation blocked: client {client.client_id} kyc_status="
+                f"{client.kyc_status}, kyc_override={client.kyc_override}"
+            )
+            # Compliance-audit: фиксируем заблокированную попытку.
+            # Коммитим в отдельной транзакции, чтобы запись осталась даже
+            # после raise HTTPException (FastAPI не откатывает то, что уже
+            # commit'нуто).
+            db.add(AuditLog(
+                entity="clients",
+                entity_id=client.client_id,
+                action="KYC_GATE_DENIED",
+                old_value=None,
+                new_value=json.dumps({
+                    "endpoint": "POST /orders/pobo",
+                    "kyc_status": client.kyc_status,
+                    "kyc_override": client.kyc_override,
+                    "reason": "kyc_not_approved",
+                    "amount": str(dto.amount) if dto.amount is not None else None,
+                    "currency": dto.currency,
+                }, ensure_ascii=False),
+                created_by=current_user.username,
+                created_at=datetime.utcnow(),
+            ))
+            await db.commit()
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "kyc_not_approved",
+                    "message": "KYC must be approved before creating orders",
+                    "kyc_status": client.kyc_status,
+                },
+            )
+
+    # Аккаунт на hold — заявки тоже запрещены (синхронизируем с UI-проверкой).
+    if client.account_status == "hold":
+        logger.warning(f"Order creation blocked: client {client.client_id} on hold")
+        db.add(AuditLog(
+            entity="clients",
+            entity_id=client.client_id,
+            action="ACCOUNT_HOLD_DENIED",
+            old_value=None,
+            new_value=json.dumps({
+                "endpoint": "POST /orders/pobo",
+                "account_status": client.account_status,
+                "account_hold_reason": client.account_hold_reason,
+                "amount": str(dto.amount) if dto.amount is not None else None,
+                "currency": dto.currency,
+            }, ensure_ascii=False),
+            created_by=current_user.username,
+            created_at=datetime.utcnow(),
+        ))
+        await db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "account_on_hold",
+                "message": "Account is on hold",
+                "reason": client.account_hold_reason,
+            },
+        )
+
     # Генерируем order_id в формате ORD/{client_numeric_id}-{order_sequence}
     order_id, new_orders_count = await generate_order_id(db, client)
     logger.info(f"Generated order_id: {order_id}")
