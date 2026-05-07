@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from io import BytesIO
 from openpyxl import load_workbook
 from app.db import get_db
-from app.models import User, OrderPobo, OrderStatusHistory, Client, Role, OrderPoboTerm, AuditLog, InstructionExport, InstructionExportItem, AppSetting, ExecutedOrder, PayeerAccount, TransactionReport, CustomerReport, OnboardingKycProfile
+from app.models import User, OrderPobo, OrderStatusHistory, Client, Role, OrderPoboTerm, AuditLog, InstructionExport, InstructionExportItem, AppSetting, ExecutedOrder, PayeerAccount, TransactionReport, CustomerReport, OnboardingKycProfile, OrgDirectory
 from app.schemas import OrderPoboDto, ErrorResponse, OrderPoboTermCreateUpdateRequest, OrderPoboTermDto, ExportInstructionRequest, ExportInstructionResponse, ExecutedOrderDto, ExecutedOrderUpdateRequest, LastInstructionExportResponse
 from app.enums import KYCStatus
 from app.deps import get_current_active_user
@@ -279,13 +279,66 @@ async def create_order(
             },
         )
 
+    # ТЗ Sec 5.2.2: bank_name / bank_address — серверная подстановка из
+    # org_directory, чтобы клиент не мог через прямой API-вызов отправить
+    # произвольные реквизиты для валидного BIC. UI делает то же самое для
+    # UX, но финальное слово за бэком.
+    final_bank_name = dto.bankName
+    final_bank_address = dto.bankAddress
+    bank_override_used = False  # для отложенного audit-лога после flush
+
+    if dto.bankBic:
+        if not dto.bankManualOverride:
+            org = await db.scalar(
+                select(OrgDirectory).where(
+                    OrgDirectory.bic_swift_cd == dto.bankBic,
+                    OrgDirectory.is_inactive.is_(False),
+                    OrgDirectory.is_delete.is_(False),
+                ).limit(1)
+            )
+            if org is None:
+                logger.warning(
+                    f"BIC {dto.bankBic} not found in org_directory; client "
+                    f"{client.client_id} did not enable manual override"
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "bic_not_in_directory",
+                        "message": (
+                            "BIC not found in directory. Enable bank_manual_override "
+                            "to enter bank details manually, or use a different BIC."
+                        ),
+                        "bic": dto.bankBic,
+                    },
+                )
+            # Подменяем тем, что в директории — клиентский input игнорируется.
+            final_bank_name = org.nm
+            final_bank_address = ", ".join(filter(None, [
+                org.addr_1, org.addr_2, org.addr_3, org.city_nm,
+            ])) or None
+        else:
+            # Override включён — клиент сам отвечает за реквизиты.
+            # Требуем не-пустой bank_name (иначе на TXT-инструкции уйдёт мусор).
+            if not final_bank_name:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "bank_name_required_for_override",
+                        "message": (
+                            "bank_name is required when bank_manual_override=True"
+                        ),
+                    },
+                )
+            bank_override_used = True
+
     # Генерируем order_id в формате ORD/{client_numeric_id}-{order_sequence}
     order_id, new_orders_count = await generate_order_id(db, client)
     logger.info(f"Generated order_id: {order_id}")
-    
+
     # Обновляем счетчик ордеров клиента
     client.orders_count = new_orders_count
-    
+
     order = OrderPobo(
         order_id=order_id,
         client_id=client.client_id,
@@ -298,8 +351,9 @@ async def create_order(
         beneficiary_country=dto.beneficiaryCountry,
         bank_country=dto.bankCountry,
         bank_bic=dto.bankBic,
-        bank_name=dto.bankName,
-        bank_address=dto.bankAddress,
+        bank_name=final_bank_name,
+        bank_address=final_bank_address,
+        bank_manual_override=dto.bankManualOverride,
         remark=dto.remark,
         invocie_required=dto.invocieRequired,
         invocie_received=dto.invocieReceived,
@@ -315,6 +369,25 @@ async def create_order(
     db.add(order)
     # Flush order first so FK-dependent rows can reference it
     await db.flush()
+
+    # ТЗ Sec 5.2.2: фиксируем каждый override-кейс в audit_log.
+    # Делаем это после flush, чтобы entity_id мог ссылаться на order_id.
+    if bank_override_used:
+        db.add(AuditLog(
+            entity="orders_pobo",
+            entity_id=order.order_id,
+            action="BANK_OVERRIDE_USED",
+            old_value=None,
+            new_value=json.dumps({
+                "client_id": client.client_id,
+                "bank_bic": dto.bankBic,
+                "bank_country": dto.bankCountry,
+                "bank_name": final_bank_name,
+                "bank_address": final_bank_address,
+            }, ensure_ascii=False),
+            created_by=current_user.username,
+            created_at=datetime.utcnow(),
+        ))
 
     # Создаем order_pobo_terms автоматически
     order_term = OrderPoboTerm(

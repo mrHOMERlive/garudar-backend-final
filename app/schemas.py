@@ -103,6 +103,12 @@ class OrderPoboDto(BaseModel):
     bankBic: Optional[str] = Field(None, validation_alias="bank_bic")
     bankName: Optional[str] = Field(None, validation_alias="bank_name")
     bankAddress: Optional[str] = Field(None, validation_alias="bank_address")
+    bankManualOverride: bool = Field(
+        default=False,
+        validation_alias="bank_manual_override",
+        description="Если False — bank_name/bank_address подставляются "
+                    "из org_directory по BIC. Если True — клиент вводит вручную (audit-log).",
+    )
     
     remark: Optional[str] = None
     clientPaymentCurrency: Optional[str] = Field(None, validation_alias="client_payment_currency")

@@ -399,6 +399,13 @@ class OrderPobo(Base):
     bank_bic: Mapped[Optional[str]] = mapped_column(String(11), nullable=True)
     bank_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     bank_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ТЗ Sec 5.2.2: если override=False (default), bank_name/bank_address
+    # принудительно подставляются сервером из org_directory по BIC.
+    # override=True означает что клиент сам ввёл реквизиты (банк не из
+    # директории) — пишется в audit_log как BANK_OVERRIDE_USED.
+    bank_manual_override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     remark: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
