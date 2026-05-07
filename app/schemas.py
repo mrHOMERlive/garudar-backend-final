@@ -1,8 +1,15 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Optional, Union
+
+from app.validators import (
+    normalize_text,
+    normalize_country,
+    validate_account_number,
+    validate_bic,
+)
 
 
 class RoleEnum(str, Enum):
@@ -115,6 +122,54 @@ class OrderPoboDto(BaseModel):
     
     createdAt: Optional[datetime] = Field(None, validation_alias="created_at")
     updatedAt: Optional[datetime] = Field(None, validation_alias="updated_at")
+
+    # ------------------------------------------------------------------
+    # Backend-side validation (ТЗ Sec 7.1)
+    # NFKC + trim для всех текстовых полей, чтобы:
+    #  - визуально одинаковые символы из разных Unicode-блоков
+    #    ложились в БД в одном виде (важно для sanction-сравнений);
+    #  - в БД не попадали leading/trailing пробелы и двойные пробелы.
+    # Country-коды нормализуем к UPPER.
+    # IBAN MOD-97 и BIC+country проверяются ниже в model_validator,
+    # потому что им нужны соседние поля (bank_country).
+    # ------------------------------------------------------------------
+    @field_validator(
+        "beneficiaryName", "beneficiaryAdress", "bankName", "bankAddress",
+        "remark", "invoiceNumber", "counterpartyId",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_text_fields(cls, v):
+        return normalize_text(v)
+
+    @field_validator(
+        "beneficiaryCountry", "bankCountry", "currency", "clientPaymentCurrency",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_country_fields(cls, v):
+        return normalize_country(v)
+
+    @model_validator(mode="after")
+    def _validate_account_and_bic(self):
+        # destination_account: если введён, нормализуем и валидируем
+        # (IBAN MOD-97 если страна IBAN-овская, иначе fallback-формат).
+        if self.destinationAccount:
+            try:
+                self.destinationAccount = validate_account_number(
+                    self.destinationAccount,
+                    self.bankCountry,
+                )
+            except ValueError as exc:
+                raise ValueError(f"destinationAccount: {exc}") from exc
+        # bank_bic: если введён, нормализуем и проверяем формат.
+        # Если есть bank_country — дополнительно сверяем страну.
+        if self.bankBic:
+            try:
+                self.bankBic = validate_bic(self.bankBic, self.bankCountry)
+            except ValueError as exc:
+                raise ValueError(f"bankBic: {exc}") from exc
+        return self
 
 
 class CreateClientRequest(BaseModel):
@@ -526,6 +581,24 @@ class KYCProfileUpdateRequest(BaseModel):
     signature_location: Optional[str] = None
     signed_kyc_document_url: Optional[str] = None
 
+    # ТЗ Sec 7.1: NFKC + trim для всех текстовых полей KYC.
+    # Особенно важно для company_name / authorized_person_name —
+    # они идут в sanction-screening, где визуально одинаковые
+    # символы из разных Unicode-блоков дают разные хэши.
+    @field_validator(
+        "company_name", "trading_name", "registration_number", "tax_id",
+        "registered_address", "telephone", "website", "principal_bankers",
+        "swift_bic", "bank_branch_address", "bank_city_country",
+        "bank_account_name", "bank_account_currency", "bank_account_number",
+        "bank_manager_contact", "authorized_person_name",
+        "authorized_person_position", "signature_location",
+        "incorporation_country",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_kyc_text(cls, v):
+        return normalize_text(v)
+
 
 class KYCProfileResponse(BaseModel):
     """Ответ с данными KYC профиля"""
@@ -687,6 +760,14 @@ class ClientRequestBadgeUpdateRequest(BaseModel):
 # NDA SCHEMAS
 # ======================================================================
 
+_NDA_TEXT_FIELDS = (
+    "template_code", "term_ru", "term_en", "partner_inn",
+    "partner_name_ru", "partner_name_en", "partner_address_ru",
+    "partner_address_en", "partner_signatory_ru", "partner_signatory_en",
+    "partner_contact_name", "partner_contact_email", "partner_contact_phone",
+)
+
+
 class NDARequestCreateDto(BaseModel):
     """Запрос на создание NDA заявки"""
     effective_date: Optional[date] = Field(None, description="Дата вступления в силу")
@@ -705,6 +786,15 @@ class NDARequestCreateDto(BaseModel):
     partner_contact_email: Optional[str] = Field(None, description="Email контактного лица")
     partner_contact_phone: Optional[str] = Field(None, description="Телефон контактного лица")
     paper_copy_required: Optional[bool] = Field(False, description="Требуется бумажная копия")
+
+    # ТЗ Sec 7.1: NFKC + trim. partner_name_* / partner_signatory_*
+    # участвуют в генерации NDA-документа, поэтому канонизация
+    # критична — иначе в подписанном документе всплывут «странные»
+    # пробелы или дубли.
+    @field_validator(*_NDA_TEXT_FIELDS, mode="before")
+    @classmethod
+    def _normalize_nda_text(cls, v):
+        return normalize_text(v)
 
 
 class NDARequestUpdateDto(BaseModel):
@@ -727,6 +817,11 @@ class NDARequestUpdateDto(BaseModel):
     partner_contact_phone: Optional[str] = Field(None, description="Телефон контактного лица")
     paper_copy_required: Optional[bool] = Field(None, description="Требуется бумажная копия")
     generated_file_url: Optional[str] = Field(None, description="URL сгенерированного PDF")
+
+    @field_validator(*_NDA_TEXT_FIELDS, mode="before")
+    @classmethod
+    def _normalize_nda_text(cls, v):
+        return normalize_text(v)
 
 
 class NDARequestDto(BaseModel):

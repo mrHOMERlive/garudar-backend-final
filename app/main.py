@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -79,12 +80,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     if app_settings.DEBUG:
         logger.debug(f"Validation error body: {exc.body}")
     
+    # exc.errors() может содержать в `ctx.error` оригинальный Exception
+    # (например, ValueError из @field_validator), который json.dumps
+    # сериализовать не умеет — превращаем через jsonable_encoder.
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={
+        content=jsonable_encoder({
             "detail": exc.errors(),
             "message": "Ошибка валидации запроса"
-        }
+        })
     )
 
 
