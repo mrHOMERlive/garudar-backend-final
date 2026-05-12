@@ -20,6 +20,9 @@ __pycache__/
 .env
 .env.*
 
+# Backup ops — local config never goes to git
+ops/backup/config.env
+
 # Logs
 *.log
 logs/
