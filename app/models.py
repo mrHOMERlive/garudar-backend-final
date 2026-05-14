@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
-from sqlalchemy import String, BigInteger, Integer, CHAR, Date, DateTime, Text, Boolean, Numeric, Index, ForeignKey, JSON, event
+from sqlalchemy import String, BigInteger, Integer, CHAR, Date, DateTime, Text, Boolean, Numeric, Index, ForeignKey, JSON, event, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 from app.enums import KYCStatus, NDAStatus, AmlCustomerType, AmlRiskLevel, AmlAlertStatus, AmlCaseStatus, AmlScreeningType
@@ -1192,12 +1192,21 @@ class Lead(Base):
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_agreed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="new", server_default="new")
+    # If the lead has been converted to a Client, this references the new Client.client_id.
+    converted_client_id: Mapped[Optional[str]] = mapped_column(
+        String(255), ForeignKey("clients.client_id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow,
+        server_default=func.now(),
+    )
 
     __table_args__ = (
         Index("idx_lead_email", "business_email"),
         Index("idx_lead_status", "status"),
         Index("idx_lead_created", "created_at"),
+        Index("idx_lead_converted_client", "converted_client_id"),
     )
 
 

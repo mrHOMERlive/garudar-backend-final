@@ -894,6 +894,13 @@ class LeadCreate(BaseModel):
         return v
 
 
+class LeadStatus(str, Enum):
+    NEW = "new"
+    IN_PROGRESS = "in_progress"
+    CONVERTED = "converted"
+    REJECTED = "rejected"
+
+
 class LeadResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -906,8 +913,21 @@ class LeadResponse(BaseModel):
     products_interested: Optional[list[str]]
     monthly_volume: str
     message: Optional[str]
-    status: str
+    status: LeadStatus
+    converted_client_id: Optional[str] = None
     created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class LeadListResponse(BaseModel):
+    items: list[LeadResponse]
+    total: int
+
+
+class LeadUpdate(BaseModel):
+    """Admin-side update to a lead. All fields optional; only provided fields change."""
+    status: Optional[LeadStatus] = None
+    converted_client_id: Optional[str] = None
 
 
 class LeadSubmitResponse(BaseModel):

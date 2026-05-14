@@ -1,12 +1,20 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from datetime import datetime
 import logging
+from typing import Optional
 
 from app.db import get_db
-from app.models import Lead, User
-from app.schemas import LeadCreate, LeadSubmitResponse, LeadResponse
+from app.models import Client, Lead, User
+from app.schemas import (
+    LeadCreate,
+    LeadListResponse,
+    LeadResponse,
+    LeadStatus,
+    LeadSubmitResponse,
+    LeadUpdate,
+)
 from app.email import send_lead_notification
 from app.rate_limit import limiter
 from app.deps import require_admin
@@ -111,6 +119,34 @@ async def create_lead(
         )
 
 
+@router.get("/leads", response_model=LeadListResponse)
+async def list_leads(
+    status_filter: Optional[LeadStatus] = Query(default=None, alias="status"),
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Список всех лидов с пагинацией и опциональным фильтром по статусу.
+    Admin-only. Используется страницей StaffLeads.
+    """
+    # Clamp pagination params to safe bounds.
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    base_q = select(Lead).order_by(Lead.created_at.desc())
+    count_q = select(func.count()).select_from(Lead)
+
+    if status_filter is not None:
+        base_q = base_q.where(Lead.status == status_filter.value)
+        count_q = count_q.where(Lead.status == status_filter.value)
+
+    total = (await db.execute(count_q)).scalar_one()
+    rows = (await db.execute(base_q.limit(limit).offset(offset))).scalars().all()
+    return LeadListResponse(items=list(rows), total=total)
+
+
 @router.get("/leads/{lead_id}", response_model=LeadResponse)
 async def get_lead(
     lead_id: int,
@@ -118,15 +154,58 @@ async def get_lead(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Получить информацию о лиде по ID (для внутреннего использования)
+    Получить информацию о лиде по ID (для внутреннего использования).
     """
     result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = result.scalar_one_or_none()
-    
+
     if not lead:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Lead with ID {lead_id} not found"
         )
-    
+
+    return lead
+
+
+@router.patch("/leads/{lead_id}", response_model=LeadResponse)
+async def update_lead(
+    lead_id: int,
+    payload: LeadUpdate,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Обновить статус лида и/или ссылку на сконвертированного Client'а.
+    Используется страницей StaffLeads (inline status dropdown) и после
+    успешного prefill-Convert в StaffClients (linking converted_client_id).
+    Admin-only.
+    """
+    lead = (
+        await db.execute(select(Lead).where(Lead.id == lead_id))
+    ).scalar_one_or_none()
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Lead with ID {lead_id} not found",
+        )
+
+    if payload.status is not None:
+        lead.status = payload.status.value
+
+    if payload.converted_client_id is not None:
+        client = (
+            await db.execute(
+                select(Client).where(Client.client_id == payload.converted_client_id)
+            )
+        ).scalar_one_or_none()
+        if not client:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Client {payload.converted_client_id} not found",
+            )
+        lead.converted_client_id = payload.converted_client_id
+
+    await db.commit()
+    await db.refresh(lead)
     return lead
