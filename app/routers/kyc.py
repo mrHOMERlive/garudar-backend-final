@@ -14,9 +14,9 @@ from openpyxl.styles import Border, Side, Alignment, Font
 from openpyxl.utils import get_column_letter
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import User, Client, OnboardingKycProfile, OnboardingKycStatusHistory, OnboardingKycUbo, OnboardingKycDocument, CustomerReport, AuditLog
+from app.models import User, Client, OnboardingKycProfile, OnboardingKycStatusHistory, OnboardingKycUbo, OnboardingKycDocument, CustomerReport, AuditLog, AmlCustomer, AmlScreening
 import json as _json
-from app.enums import KYCStatus, KYCDocumentType
+from app.enums import KYCStatus, KYCDocumentType, AmlCustomerType, AmlRiskLevel, AmlScreeningType
 from app.s3_client import S3Client, get_s3_client, generate_kyc_s3_key
 from app.file_validators import validate_pdf_not_encrypted
 from app.logger import setup_logger
@@ -960,7 +960,11 @@ async def make_kyc_decision(
         )
         db.add(customer_report)
 
-        # Авто-скрининг AML: компания + директор + UBO
+        # Авто-скрининг AML: компания + директор + UBO (CA + локальный PPATK).
+        # Раньше ошибки молча проглатывались — staff видел "KYC одобрен" но не
+        # понимал почему в StaffComplyAdvantage у клиента нет ни алертов, ни
+        # риск-уровня. Теперь любая ошибка персистируется как явная ERROR-запись:
+        # placeholder AmlCustomer + AmlScreening(status='ERROR', raw=...).
         try:
             from app.services.aml_auto_screening import auto_screen_on_kyc_approval
             await auto_screen_on_kyc_approval(
@@ -969,7 +973,37 @@ async def make_kyc_decision(
                 triggered_by=current_user.user_id,
             )
         except Exception as e:
-            logger.error(f"AML авто-скрининг не удался для {client_id}: {e}")
+            logger.exception(f"AML авто-скрининг упал для {client_id}")
+            try:
+                error_customer = AmlCustomer(
+                    client_id=client_id,
+                    customer_identifier=None,
+                    external_identifier=f"{client_id}-error-{int(now.timestamp())}",
+                    name=client.client_name or "ERROR",
+                    type=AmlCustomerType.COMPANY.value,
+                    risk_level=AmlRiskLevel.UNKNOWN.value,
+                    monitored=False,
+                    screening_result="ERROR",
+                    raw_response={"error": str(e), "error_type": type(e).__name__},
+                    created_at=datetime.utcnow(),
+                )
+                db.add(error_customer)
+                await db.flush()
+                db.add(AmlScreening(
+                    aml_customer_id=error_customer.id,
+                    screening_type=AmlScreeningType.INITIAL.value,
+                    match_count=0,
+                    status="ERROR",
+                    raw_response={"error": str(e), "error_type": type(e).__name__},
+                    created_by=current_user.user_id,
+                    created_at=datetime.utcnow(),
+                ))
+            except Exception as err_persist:
+                # Если даже запись об ошибке не сохранилась — всё что мы можем
+                # сделать это вылить её в логи; коммит KYC-апрува не отменяем.
+                logger.exception(
+                    f"Не удалось зафиксировать AML error-row для {client_id}: {err_persist}"
+                )
 
     await db.commit()
     await db.refresh(profile)

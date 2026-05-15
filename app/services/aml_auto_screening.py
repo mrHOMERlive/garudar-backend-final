@@ -16,6 +16,11 @@ from app.models import (
 )
 from app.enums import AmlCustomerType, AmlRiskLevel, AmlAlertStatus, AmlScreeningType
 from app.services.comply_advantage import comply_advantage_client
+from app.services.local_sanctions_screening import (
+    screen_name_against_local,
+    severity_from_source,
+    alert_external_id_for_entry,
+)
 
 logger = logging.getLogger("garudar_api")
 
@@ -173,6 +178,62 @@ async def _screen_and_save(
             created_at=datetime.utcnow(),
         )
         db.add(alert)
+
+    # ── Локальный PPATK-скрининг (DTTOT/DPPSPM/UN-AQ) ───────────────────
+    # ComplyAdvantage не покрывает индонезийские PPATK-списки; данные из
+    # таблицы entries (обновляются ежедневно через sanctions_scheduler)
+    # подключаются здесь как параллельная проверка. Hit апгрейдит риск до
+    # high (что в свою очередь триггерит account_status='hold' в шаге 7
+    # auto_screen_on_kyc_approval).
+    local_entry_type = (
+        "Individual" if customer_type == AmlCustomerType.PERSON.value else "Entity"
+    )
+    try:
+        local_matches = await screen_name_against_local(
+            db=db,
+            name=name,
+            entry_type=local_entry_type,
+        )
+    except Exception as e:
+        # Локальный скрининг не должен ломать CA-флоу. Записываем только в
+        # логи — клиенту-сотруднику покажется, что PPATK-проверка просто не
+        # дала результатов. При деплое миграции pg_trgm её НЕ должно
+        # происходить; если случилось — нужен фикс на стороне БД/миграций.
+        logger.warning(
+            f"Локальный PPATK-скрининг упал для '{name}' (customer {customer.id}): {e}"
+        )
+        local_matches = []
+
+    local_high_risk = False
+    for m in local_matches:
+        db.add(AmlAlert(
+            aml_customer_id=customer.id,
+            external_alert_id=alert_external_id_for_entry(m.entry_id),
+            title=f"PPATK match: {m.source_list}",
+            description=(
+                f"Local sanctions list match. Source: {m.source_list}. "
+                f"Matched name: '{m.matched_name}' "
+                f"(similarity {m.similarity:.2f}). Entry ID: {m.entry_id}."
+            ),
+            match_type="ppatk_local",
+            match_details={
+                "source_list": m.source_list,
+                "entry_id": m.entry_id,
+                "matched_name": m.matched_name,
+                "full_name": m.full_name,
+                "similarity": m.similarity,
+                "entry_type": m.entry_type,
+            },
+            status=AmlAlertStatus.PENDING.value,
+            created_at=datetime.utcnow(),
+        ))
+        if severity_from_source(m.source_list) == "high":
+            local_high_risk = True
+
+    if local_high_risk and customer.risk_level != AmlRiskLevel.HIGH.value:
+        customer.risk_level = AmlRiskLevel.HIGH.value
+    if local_matches:
+        screening.match_count = (screening.match_count or 0) + len(local_matches)
 
     return customer
 

@@ -281,6 +281,10 @@ class ClientDto(BaseModel):
     account_status: Optional[str] = Field(default="active", description="Статус аккаунта")
     account_hold_reason: Optional[str] = Field(None, description="Причина блокировки")
     aml_risk_level: Optional[str] = Field(None, description="Наивысший уровень AML-риска (low/medium/high/unknown)")
+    ppatk_pending_alerts_count: int = Field(
+        default=0,
+        description="Количество PENDING-алертов с match_type='ppatk_local' (DTTOT/DPPSPM/UN-AQ). Используется UI как индикатор того, что у клиента есть незакрытые локальные PPATK-совпадения.",
+    )
     active_badges_count: Optional[int] = Field(default=0, description="Количество активных бейджей")
     attention_required_count: Optional[int] = Field(default=0, description="Количество бейджей требующих внимания")
     user_id: str

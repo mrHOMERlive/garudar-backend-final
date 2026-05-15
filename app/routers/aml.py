@@ -17,7 +17,7 @@ from app.db import get_db
 from app.deps import require_staff_or_admin
 from app.models import (
     User, Role, AmlCustomer, AmlScreening, AmlAlert, AmlCase,
-    AmlCaseComment, AmlRiskOverride,
+    AmlCaseComment, AmlRiskOverride, Client,
 )
 from app.enums import (
     AmlCustomerType, AmlRiskLevel, AmlAlertStatus, AmlCaseStatus, AmlScreeningType,
@@ -32,6 +32,11 @@ from app.schemas import (
 )
 from app.services.comply_advantage import comply_advantage_client
 from app.services.aml_auto_screening import determine_risk_from_aml_types
+from app.services.local_sanctions_screening import (
+    screen_name_against_local,
+    severity_from_source,
+    alert_external_id_for_entry,
+)
 from app.s3_client import s3_client
 
 logger = logging.getLogger("garudar_api")
@@ -1250,6 +1255,145 @@ async def get_client_aml_status(
         "client_id": client_id,
         "aml_risk_level": worst.risk_level,
         "customers": [AmlCustomerDto.model_validate(c) for c in customers],
+    }
+
+
+# ======================================================================
+# Local PPATK rescreen (DTTOT / DPPSPM / UN-AQ)
+# ======================================================================
+
+@router.post("/client/{client_id}/rescreen-ppatk")
+async def rescreen_client_ppatk(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin),
+):
+    """Перепроверить клиента только по локальным PPATK-спискам.
+
+    Идёт ТОЛЬКО против таблицы entries (DTTOT/DPPSPM/UN-AQ) — без вызова
+    ComplyAdvantage. Используется когда staff хочет повторить PPATK-проверку
+    после обновления списков (`sanctions_scheduler` синкает их ежедневно).
+
+    Идемпотентна: повторный rescreen того же клиента не создаст дубль
+    `AmlAlert` для уже зафиксированного entry — фильтр по
+    `external_alert_id = "LOCAL-<entry_id>"`.
+
+    400 — если клиент ещё ни разу не скринился (нет ни одного AmlCustomer).
+    Этот случай означает что KYC не был одобрен и общий поток скрининга
+    ещё не запускался; нужно сначала сделать "Run AML Screen" или одобрить KYC.
+    """
+    # 1. Клиент существует?
+    client = await db.scalar(select(Client).where(Client.client_id == client_id))
+    if client is None:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # 2. Загружаем все AmlCustomer'ы для этого клиента (компания + директор + UBO).
+    customers = (
+        await db.execute(
+            select(AmlCustomer).where(AmlCustomer.client_id == client_id)
+        )
+    ).scalars().all()
+    if not customers:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No AML customers for this client. Run full screening first "
+                "(approve KYC or call /aml/screen/company)."
+            ),
+        )
+
+    # 3. Для каждого AmlCustomer прогоняем локальный скрининг и создаём
+    #    новые алерты только для тех entries, по которым ещё нет матча.
+    new_alerts_total = 0
+    matches_total = 0
+    matches_by_source: dict[str, int] = {}
+    any_high_match = False
+
+    for customer in customers:
+        entry_type = (
+            "Individual"
+            if customer.type == AmlCustomerType.PERSON.value
+            else "Entity"
+        )
+        try:
+            matches = await screen_name_against_local(
+                db=db,
+                name=customer.name,
+                entry_type=entry_type,
+            )
+        except Exception as e:
+            logger.warning(
+                "PPATK rescreen для AmlCustomer %s упал: %s", customer.id, e
+            )
+            continue
+
+        if not matches:
+            continue
+
+        matches_total += len(matches)
+
+        # Сейчас уже существующие LOCAL-* алерты этого клиента (для идемпотентности).
+        existing_ids = set(
+            (await db.execute(
+                select(AmlAlert.external_alert_id).where(
+                    AmlAlert.aml_customer_id == customer.id,
+                    AmlAlert.external_alert_id.like("LOCAL-%"),
+                )
+            )).scalars().all()
+        )
+
+        for m in matches:
+            matches_by_source[m.source_list] = matches_by_source.get(m.source_list, 0) + 1
+            ext_id = alert_external_id_for_entry(m.entry_id)
+            if ext_id in existing_ids:
+                continue  # уже зафиксировано — не дублируем
+
+            db.add(AmlAlert(
+                aml_customer_id=customer.id,
+                external_alert_id=ext_id,
+                title=f"PPATK match: {m.source_list}",
+                description=(
+                    f"Local sanctions list match (manual rescreen). "
+                    f"Source: {m.source_list}. "
+                    f"Matched name: '{m.matched_name}' "
+                    f"(similarity {m.similarity:.2f}). "
+                    f"Entry ID: {m.entry_id}."
+                ),
+                match_type="ppatk_local",
+                match_details={
+                    "source_list": m.source_list,
+                    "entry_id": m.entry_id,
+                    "matched_name": m.matched_name,
+                    "full_name": m.full_name,
+                    "similarity": m.similarity,
+                    "entry_type": m.entry_type,
+                    "rescreen": True,
+                },
+                status=AmlAlertStatus.PENDING.value,
+                created_at=datetime.utcnow(),
+            ))
+            new_alerts_total += 1
+            if severity_from_source(m.source_list) == "high":
+                any_high_match = True
+
+        # Если хоть один high-match новый — апгрейдим риск самого customer'а.
+        if any_high_match and customer.risk_level != AmlRiskLevel.HIGH.value:
+            customer.risk_level = AmlRiskLevel.HIGH.value
+            customer.updated_at = datetime.utcnow()
+
+    # 4. Если есть high-match — ставим клиента в hold.
+    if any_high_match and client.account_status != "hold":
+        client.account_status = "hold"
+        client.account_hold_reason = "AML screening: PPATK match detected"
+
+    await db.commit()
+
+    return {
+        "client_id": client_id,
+        "matches_total": matches_total,
+        "matches_by_source": matches_by_source,
+        "new_alerts": new_alerts_total,
+        "account_status": client.account_status,
     }
 
 

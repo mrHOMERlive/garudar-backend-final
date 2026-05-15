@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from app.db import get_db
-from app.models import User, Client, AuditLog, ClientRequestBadge, AmlCustomer
+from app.models import User, Client, AuditLog, ClientRequestBadge, AmlCustomer, AmlAlert
 from app.schemas import CreateClientRequest, ClientResponse, ClientDto, UpdateClientRequest
 from app.deps import require_admin, get_current_active_user
 from app.security import get_password_hash
@@ -185,6 +185,20 @@ async def get_all_clients(
         if current is None or RISK_PRIORITY.get(rlevel, 0) > RISK_PRIORITY.get(current, 0):
             aml_risk_map[cid] = rlevel
 
+    # Сколько PENDING-алертов с match_type='ppatk_local' у каждого клиента —
+    # один JOIN от aml_alerts к aml_customers с агрегацией по client_id.
+    ppatk_alerts_result = await db.execute(
+        select(AmlCustomer.client_id, func.count(AmlAlert.id))
+        .join(AmlAlert, AmlAlert.aml_customer_id == AmlCustomer.id)
+        .where(
+            AmlCustomer.client_id.isnot(None),
+            AmlAlert.match_type == "ppatk_local",
+            AmlAlert.status == "pending",
+        )
+        .group_by(AmlCustomer.client_id)
+    )
+    ppatk_alert_counts: dict[str, int] = {cid: cnt for cid, cnt in ppatk_alerts_result.all()}
+
     clients_data = []
     for client, username, is_active in rows:
         active_badges_result = await db.execute(
@@ -213,6 +227,7 @@ async def get_all_clients(
             "active_badges_count": active_badges_count,
             "attention_required_count": attention_required_count,
             "aml_risk_level": aml_risk_map.get(client.client_id),
+            "ppatk_pending_alerts_count": ppatk_alert_counts.get(client.client_id, 0),
         }
         clients_data.append(ClientDto.model_validate(client_dict, from_attributes=True))
 
@@ -263,6 +278,18 @@ async def get_client_by_id(
     aml_levels = [r[0] for r in aml_result.all()]
     aml_risk = max(aml_levels, key=lambda l: RISK_PRIORITY.get(l, 0)) if aml_levels else None
 
+    # PPATK pending alerts (DTTOT/DPPSPM/UN-AQ) для этого клиента.
+    ppatk_count_result = await db.execute(
+        select(func.count(AmlAlert.id))
+        .join(AmlCustomer, AmlAlert.aml_customer_id == AmlCustomer.id)
+        .where(
+            AmlCustomer.client_id == client_id,
+            AmlAlert.match_type == "ppatk_local",
+            AmlAlert.status == "pending",
+        )
+    )
+    ppatk_pending = ppatk_count_result.scalar() or 0
+
     client_dict = {
         **client.__dict__,
         "username": username,
@@ -270,6 +297,7 @@ async def get_client_by_id(
         "active_badges_count": active_badges_count,
         "attention_required_count": attention_required_count,
         "aml_risk_level": aml_risk,
+        "ppatk_pending_alerts_count": ppatk_pending,
     }
 
     return ClientDto.model_validate(client_dict, from_attributes=True)
