@@ -144,7 +144,13 @@ def validate_bic(bic: str, country: Optional[str] = None) -> str:
     if country:
         country_upper = country.strip().upper()
         bic_country = cleaned[4:6]
-        if bic_country != country_upper:
+        # Strict ISO-2 ↔ BIC[4:6] match только когда country тоже в форме ISO-2.
+        # Legacy данные имеют полные названия ('TAIWAN' вместо 'TW') — для
+        # backward-compat пропускаем (иначе response_model на исторических
+        # данных всегда 500'тится при serialization). Новый input с UI всегда
+        # приходит как ISO-2 (через CountrySelector), так что строгая проверка
+        # на input сохраняется.
+        if len(country_upper) == 2 and bic_country != country_upper:
             raise ValueError(
                 f"BIC country '{bic_country}' does not match selected country '{country_upper}'"
             )
