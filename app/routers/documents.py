@@ -348,7 +348,11 @@ async def upload_document(
         action=action,
         old_file_url=old_file_url,
         new_file_url=s3_key,
-        user_id=current_user.user_id,
+        # audit_log.created_by — для compliance-аудитора. Передаём
+        # username (читаемое имя), а не UUID. История остаётся
+        # привязанной к user через `entity_id` (для documents — doc_id,
+        # а через order — к client).
+        user_id=current_user.username,
         replace_reason=replace_reason,
     )
     

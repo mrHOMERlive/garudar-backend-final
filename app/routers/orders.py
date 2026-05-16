@@ -560,7 +560,7 @@ async def update_order(
                     "moved_at": executed_order.moved_at,
                     "moved_by": executed_order.moved_by,
                 },
-                user_id=current_user.user_id,
+                user_id=current_user.username,
             )
 
             # Автоматически создаем TransactionReport при пометке ордера как Executed
@@ -883,7 +883,7 @@ async def create_or_update_order_terms(
             action="UPDATE",
             old_value=old_values,
             new_value=new_values,
-            user_id=current_user.user_id,
+            user_id=current_user.username,
         )
         
         await db.commit()
@@ -972,7 +972,7 @@ async def create_or_update_order_terms(
             action="INSERT",
             old_value=None,
             new_value=new_values,
-            user_id=current_user.user_id,
+            user_id=current_user.username,
         )
         
         await db.commit()
@@ -1526,7 +1526,7 @@ async def update_executed_order(
         action="UPDATE",
         old_value=old_values,
         new_value=new_values,
-        user_id=current_user.user_id,
+        user_id=current_user.username,
     )
     
     await db.commit()
