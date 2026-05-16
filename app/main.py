@@ -7,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from app.routers import auth, users, orders, entries, dicts, settings, clients, documents, payeer_accounts, kyc, badges, leads, nda, legal, service_agreement, customer_report, transaction_report, aml, aml_webhooks
+from app.routers import auth, users, orders, entries, dicts, settings, clients, documents, payeer_accounts, kyc, badges, leads, nda, legal, service_agreement, customer_report, transaction_report, aml, aml_webhooks, audit
 from app.config import settings as app_settings
 from app.logger import setup_logger, get_safe_error_details
 import asyncio
@@ -162,6 +162,7 @@ app.include_router(customer_report.router, prefix="/api/v1")
 app.include_router(transaction_report.router, prefix="/api/v1")
 app.include_router(aml.router)
 app.include_router(aml_webhooks.router)
+app.include_router(audit.router)
 
 
 @app.on_event("startup")

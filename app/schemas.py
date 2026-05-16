@@ -1281,3 +1281,57 @@ class AmlSummaryDto(BaseModel):
     open_cases: int = 0
     open_alerts: int = 0
     monitored: int = 0
+
+
+# ======================================================================
+# AUDIT LOG (ТЗ §4.12 — staff UI viewer)
+# ======================================================================
+
+
+class AuditLogDto(BaseModel):
+    """DTO для одной строки audit_log в списке. old/new скрыты — только
+    флаги, чтобы payload не разрастался при большом limit."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    entity: Optional[str] = None
+    entity_id: Optional[str] = None
+    action: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    has_old_value: bool = False
+    has_new_value: bool = False
+
+
+class AuditLogDetailDto(BaseModel):
+    """DTO для деталей одной записи audit_log. old_value/new_value
+    распарсены из JSON-строки. *_raw — оригинальная строка из БД (для
+    случаев когда JSON был побит). UI отдаёт предпочтение parsed-полям."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    entity: Optional[str] = None
+    entity_id: Optional[str] = None
+    action: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    old_value: Optional[Union[dict, list]] = None
+    new_value: Optional[Union[dict, list]] = None
+    old_value_raw: Optional[str] = None
+    new_value_raw: Optional[str] = None
+
+
+class AuditLogPageDto(BaseModel):
+    """Страница audit_log: items + метаданные пагинации."""
+    items: list[AuditLogDto] = []
+    total: int = 0
+    limit: int = 25
+    offset: int = 0
+
+
+class AuditLogDistinctValuesDto(BaseModel):
+    """Уникальные значения для UI filter-чипов."""
+    entities: list[str] = []
+    actions: list[str] = []
+    users: list[str] = []
+
