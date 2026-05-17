@@ -8,6 +8,14 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15  # Сокращено для безопасности
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # Refresh token живет 7 дней
+
+    # Rate limit на /auth/login и /auth/refresh (slowapi format: "N/period").
+    # Prod: "5/minute" защищает от brute-force. Dev/CI/e2e-suite: подними до
+    # "100/minute" через env-var — без этого playwright suite получает 429
+    # к 6-му логину (5 в 01-login.spec + 1 setup + ещё несколько в обходных
+    # тестах за минуту).
+    AUTH_LOGIN_RATE_LIMIT: str = "5/minute"
+    AUTH_REFRESH_RATE_LIMIT: str = "10/minute"
     
     # CORS Configuration
     CORS_ORIGINS: str  # Список origins через запятую, например: "https://example.com,https://app.example.com"

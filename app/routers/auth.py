@@ -61,7 +61,7 @@ def _clear_auth_cookies(response: JSONResponse):
     summary="Авторизация и получение JWT токена",
     description="Принимает логин и пароль, возвращает JWT токен при успешной аутентификации. Лимит: 5 попыток в минуту.",
 )
-@limiter.limit("5/minute")
+@limiter.limit(settings.AUTH_LOGIN_RATE_LIMIT)
 async def login(
     request: Request,
     dto: LoginRequestDto,
@@ -115,7 +115,7 @@ async def login(
     summary="Обновление токенов",
     description="Обновляет пару access/refresh токенов используя refresh token",
 )
-@limiter.limit("10/minute")
+@limiter.limit(settings.AUTH_REFRESH_RATE_LIMIT)
 async def refresh_tokens(
     request: Request,
     token_request: RefreshTokenRequest = None,
