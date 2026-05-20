@@ -246,9 +246,59 @@ async def send_lead_notification(lead_data: dict):
         await fm.send_message(message)
         
         logger.info(f"Email notification sent successfully for lead ID={lead_data.get('id')}")
-        
+
     except Exception as e:
         logger.error(
             f"Failed to send email notification for lead ID={lead_data.get('id')}: {str(e)}",
             exc_info=True
+        )
+
+
+async def send_service_agreement_status_email(
+    email: str,
+    client_name: str,
+    status: str,
+    comment: str | None = None,
+) -> None:
+    """Уведомление клиента о смене статуса Service Agreement.
+
+    Заглушка: полная реализация (HTML-шаблон, brand-стиль, локализация)
+    запланирована в рамках общего email-блока (аудит-пункт №60). Сейчас
+    отправляем минимальное plain-text сообщение, чтобы был аудит-trail
+    события и dev-видимость в логах. Молча no-op-ает, если SMTP не
+    настроен (см. is_email_configured()).
+    """
+    if not is_email_configured() or not email or "@" not in email:
+        logger.info(
+            "SA status email skipped (no SMTP or invalid recipient): "
+            f"client={client_name}, status={status}"
+        )
+        return
+
+    try:
+        conf = get_email_config()
+        subject = f"Service Agreement — статус '{status}'"
+        body_lines = [
+            f"Здравствуйте, {html.escape(client_name)}.",
+            "",
+            f"Статус Service Agreement обновлён: {html.escape(status)}.",
+        ]
+        if comment:
+            body_lines.extend(["", f"Комментарий: {html.escape(comment)}"])
+        body_lines.extend(["", "С уважением,", "Команда Garudar"])
+        body = "<br>".join(body_lines)
+
+        message = MessageSchema(
+            subject=subject,
+            recipients=[email],
+            body=body,
+            subtype=MessageType.html,
+        )
+        fm = FastMail(conf)
+        await fm.send_message(message)
+        logger.info(f"SA status email sent: client={client_name}, status={status}")
+    except Exception as e:
+        logger.error(
+            f"Failed to send SA status email (client={client_name}, status={status}): {e}",
+            exc_info=True,
         )

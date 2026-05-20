@@ -774,6 +774,7 @@ _NDA_TEXT_FIELDS = (
     "template_code", "term_ru", "term_en", "partner_inn",
     "partner_name_ru", "partner_name_en", "partner_address_ru",
     "partner_address_en", "partner_signatory_ru", "partner_signatory_en",
+    "partner_signatory_title_en", "partner_country_en",
     "partner_contact_name", "partner_contact_email", "partner_contact_phone",
 )
 
@@ -792,6 +793,8 @@ class NDARequestCreateDto(BaseModel):
     partner_address_en: Optional[str] = Field(None, description="Адрес партнера (англ)")
     partner_signatory_ru: Optional[str] = Field(None, description="Подписант партнера (рус)")
     partner_signatory_en: Optional[str] = Field(None, description="Подписант партнера (англ)")
+    partner_signatory_title_en: Optional[str] = Field(None, description="Должность подписанта партнера (англ)")
+    partner_country_en: Optional[str] = Field(None, description="Страна incorporation партнера (англ)")
     partner_contact_name: Optional[str] = Field(None, description="Контактное лицо партнера")
     partner_contact_email: Optional[str] = Field(None, description="Email контактного лица")
     partner_contact_phone: Optional[str] = Field(None, description="Телефон контактного лица")
@@ -822,11 +825,14 @@ class NDARequestUpdateDto(BaseModel):
     partner_address_en: Optional[str] = Field(None, description="Адрес партнера (англ)")
     partner_signatory_ru: Optional[str] = Field(None, description="Подписант партнера (рус)")
     partner_signatory_en: Optional[str] = Field(None, description="Подписант партнера (англ)")
+    partner_signatory_title_en: Optional[str] = Field(None, description="Должность подписанта партнера (англ)")
+    partner_country_en: Optional[str] = Field(None, description="Страна incorporation партнера (англ)")
     partner_contact_name: Optional[str] = Field(None, description="Контактное лицо партнера")
     partner_contact_email: Optional[str] = Field(None, description="Email контактного лица")
     partner_contact_phone: Optional[str] = Field(None, description="Телефон контактного лица")
     paper_copy_required: Optional[bool] = Field(None, description="Требуется бумажная копия")
     generated_file_url: Optional[str] = Field(None, description="URL сгенерированного PDF")
+    signed_file_url: Optional[str] = Field(None, description="URL подписанного PDF/DOCX")
 
     @field_validator(*_NDA_TEXT_FIELDS, mode="before")
     @classmethod
@@ -853,6 +859,8 @@ class NDARequestDto(BaseModel):
     partner_address_en: Optional[str] = None
     partner_signatory_ru: Optional[str] = None
     partner_signatory_en: Optional[str] = None
+    partner_signatory_title_en: Optional[str] = None
+    partner_country_en: Optional[str] = None
     partner_contact_name: Optional[str] = None
     partner_contact_email: Optional[str] = None
     partner_contact_phone: Optional[str] = None
@@ -861,9 +869,132 @@ class NDARequestDto(BaseModel):
     generated_file_url: Optional[str] = None
     generated_file_name: Optional[str] = None
     generated_file_size: Optional[int] = None
+    signed_file_key: Optional[str] = None
+    signed_file_url: Optional[str] = None
+    signed_file_name: Optional[str] = None
+    signed_file_size: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     submitted_at: Optional[datetime] = None
+
+
+class NDADecisionDto(BaseModel):
+    """Staff/Admin решение по NDA заявке (accept / reject)."""
+    status: str = Field(..., description="'accepted' или 'rejected'")
+    comment: Optional[str] = Field(None, description="Комментарий (обязателен для rejected)")
+
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, v: str) -> str:
+        from app.enums import NDAStatus
+        allowed = {NDAStatus.ACCEPTED.value, NDAStatus.REJECTED.value}
+        if v not in allowed:
+            raise ValueError(f"status должен быть одним из: {sorted(allowed)}")
+        return v
+
+
+# ======================================================================
+# SERVICE AGREEMENT SCHEMAS
+# Зеркало NDA-схем (см. модель ServiceAgreementRequest).
+# ======================================================================
+
+_SA_TEXT_FIELDS = (
+    "template_code", "company_name", "country", "address",
+    "signatory_name", "signatory_title", "registration_number",
+    "tax_id", "contact_email", "contact_phone", "term",
+)
+
+
+class ServiceAgreementRequestCreateDto(BaseModel):
+    """Запрос на создание Service Agreement заявки."""
+    effective_date: Optional[date] = Field(None, description="Дата вступления в силу")
+    template_code: Optional[str] = Field(None, description="Код шаблона")
+    company_name: Optional[str] = Field(None, description="Наименование компании клиента")
+    country: Optional[str] = Field(None, description="Страна incorporation")
+    address: Optional[str] = Field(None, description="Юридический адрес")
+    signatory_name: Optional[str] = Field(None, description="ФИО подписанта")
+    signatory_title: Optional[str] = Field(None, description="Должность подписанта")
+    registration_number: Optional[str] = Field(None, description="Регистрационный номер")
+    tax_id: Optional[str] = Field(None, description="ИНН/Tax ID")
+    contact_email: Optional[str] = Field(None, description="Email для уведомлений")
+    contact_phone: Optional[str] = Field(None, description="Контактный телефон")
+    term: Optional[str] = Field(None, description="Срок действия договора")
+
+    @field_validator(*_SA_TEXT_FIELDS, mode="before")
+    @classmethod
+    def _normalize_sa_text(cls, v):
+        return normalize_text(v)
+
+
+class ServiceAgreementRequestUpdateDto(BaseModel):
+    """Запрос на обновление Service Agreement заявки."""
+    status: Optional[str] = Field(None, description="Статус SA")
+    effective_date: Optional[date] = Field(None)
+    template_code: Optional[str] = Field(None)
+    company_name: Optional[str] = Field(None)
+    country: Optional[str] = Field(None)
+    address: Optional[str] = Field(None)
+    signatory_name: Optional[str] = Field(None)
+    signatory_title: Optional[str] = Field(None)
+    registration_number: Optional[str] = Field(None)
+    tax_id: Optional[str] = Field(None)
+    contact_email: Optional[str] = Field(None)
+    contact_phone: Optional[str] = Field(None)
+    term: Optional[str] = Field(None)
+    generated_file_url: Optional[str] = Field(None)
+    signed_file_url: Optional[str] = Field(None)
+
+    @field_validator(*_SA_TEXT_FIELDS, mode="before")
+    @classmethod
+    def _normalize_sa_text(cls, v):
+        return normalize_text(v)
+
+
+class ServiceAgreementRequestDto(BaseModel):
+    """DTO для отображения Service Agreement заявки."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: int = Field(validation_alias="sa_id", description="ID заявки SA")
+    client_id: str
+    template_code: Optional[str] = None
+    status: Optional[str] = None
+    effective_date: Optional[date] = None
+    company_name: Optional[str] = None
+    country: Optional[str] = None
+    address: Optional[str] = None
+    signatory_name: Optional[str] = None
+    signatory_title: Optional[str] = None
+    registration_number: Optional[str] = None
+    tax_id: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    term: Optional[str] = None
+    generated_file_key: Optional[str] = None
+    generated_file_url: Optional[str] = None
+    generated_file_name: Optional[str] = None
+    generated_file_size: Optional[int] = None
+    signed_file_key: Optional[str] = None
+    signed_file_url: Optional[str] = None
+    signed_file_name: Optional[str] = None
+    signed_file_size: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    submitted_at: Optional[datetime] = None
+
+
+class ServiceAgreementDecisionDto(BaseModel):
+    """Staff/Admin решение по SA-заявке (accept / reject)."""
+    status: str = Field(..., description="'accepted' или 'rejected'")
+    comment: Optional[str] = Field(None, description="Комментарий (обязателен для rejected)")
+
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, v: str) -> str:
+        from app.enums import ServiceAgreementStatus
+        allowed = {ServiceAgreementStatus.ACCEPTED.value, ServiceAgreementStatus.REJECTED.value}
+        if v not in allowed:
+            raise ValueError(f"status должен быть одним из: {sorted(allowed)}")
+        return v
 
 
 # ======================================================================

@@ -87,7 +87,7 @@ class KYCDocumentType(str, Enum):
 
 class NDAStatus(str, Enum):
     """Статусы NDA клиента"""
-    
+
     NOT_STARTED = "not_started"  # NDA ещё не начат
     DRAFT = "draft"  # Черновик
     GENERATED = "generated"  # Файл сформирован и скачан
@@ -95,6 +95,18 @@ class NDAStatus(str, Enum):
     SUBMITTED = "submitted"  # Отправлен в staff
     ACCEPTED = "accepted"  # Staff принял
     REJECTED = "rejected"  # Staff отклонил
+
+
+class ServiceAgreementStatus(str, Enum):
+    """Статусы Service Agreement клиента (зеркало NDAStatus, см. ТЗ Sec 11)."""
+
+    NOT_STARTED = "not_started"
+    DRAFT = "draft"
+    GENERATED = "generated"
+    SIGNED_UPLOADED = "signed_uploaded"
+    SUBMITTED = "submitted"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
 
 
 class AllowedDocTypes:

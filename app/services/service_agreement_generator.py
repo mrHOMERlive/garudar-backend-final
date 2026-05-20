@@ -1,3 +1,30 @@
+"""Генератор Service Agreement DOCX из локального шаблона.
+
+Алгоритм — зеркало `nda_generator.py` (preserve formatting через `char_to_run`
+map). Используется `app/template/service_agreement/SA_ENG_V1.docx`.
+
+Соответствие плейсхолдеров шаблона полям модели `ServiceAgreementRequest`:
+
+| Шаблон                | Поле модели           |
+|-----------------------|-----------------------|
+| [EFFECTIVE_DATE]      | effective_date        |
+| [COMPANY_NAME]        | company_name          |
+| [COUNTRY]             | country               |
+| [ADDRESS]             | address               |
+| [SIGNATORY_NAME]      | signatory_name        |
+| [SIGNATORY_TITLE]     | signatory_title       |
+| [REGISTRATION_NUMBER] | registration_number   |
+| [TAX_ID]              | tax_id                |
+| [CONTACT_EMAIL]       | contact_email         |
+| [CONTACT_PHONE]       | contact_phone         |
+| [TERM]                | term                  |
+
+Если какого-то плейсхолдера нет в .docx — значение просто не подставляется
+(it's not an error). При добавлении новых плейсхолдеров шаблон редактируется
+вручную в Word.
+"""
+
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 from typing import Dict
@@ -5,30 +32,35 @@ from typing import Dict
 from docx import Document
 
 
-TEMPLATE_NAME = "3.3. Service Agreement - GAN 02022026.docx"
+TEMPLATE_NAME = "SA_ENG_V1.docx"
+TEMPLATE_PATH = Path(__file__).parent.parent / "template" / "service_agreement" / TEMPLATE_NAME
 
-TEMPLATE_PATH = Path(__file__).parent.parent / "template" / TEMPLATE_NAME
-
-# Маппинг плейсхолдеров шаблона -> ключи полей из запроса.
-# Заполняется после подготовки шаблона — замените ключи на реальные
-# плейсхолдеры, которые будут расставлены в .docx файле.
-# Пример: {"[POINT 1]": "effective_date", "[POINT 2]": "company_name"}
 FIELD_MAPPING: Dict[str, str] = {
-    "[EFFECTIVE_DATE]": "effective_date",
-    "[COMPANY_NAME]": "company_name",
-    "[COUNTRY]": "country",
-    "[ADDRESS]": "address",
-    "[SIGNATORY_NAME]": "signatory_name",
+    "[EFFECTIVE_DATE]":      "effective_date",
+    "[COMPANY_NAME]":        "company_name",
+    "[COUNTRY]":             "country",
+    "[ADDRESS]":             "address",
+    "[SIGNATORY_NAME]":      "signatory_name",
+    "[SIGNATORY_TITLE]":     "signatory_title",
+    "[REGISTRATION_NUMBER]": "registration_number",
+    "[TAX_ID]":              "tax_id",
+    "[CONTACT_EMAIL]":       "contact_email",
+    "[CONTACT_PHONE]":       "contact_phone",
+    "[TERM]":                "term",
 }
 
 
+def _format_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, date):
+        return value.strftime("%d.%m.%Y")
+    return str(value)
+
+
 def _replace_placeholders(doc: Document, fields: Dict) -> None:
-    """
-    Заменяет плейсхолдеры в документе на значения из fields.
-    Обрабатывает параграфы и ячейки таблиц, сохраняя форматирование runs.
-    """
     replacements = {
-        placeholder: str(fields[field_name])
+        placeholder: _format_value(fields[field_name])
         for placeholder, field_name in FIELD_MAPPING.items()
         if field_name in fields and fields[field_name] is not None
     }
@@ -97,22 +129,13 @@ def _replace_placeholders(doc: Document, fields: Dict) -> None:
 
 
 def generate(fields: Dict) -> bytes:
-    """
-    Генерирует заполненный Service Agreement из локального шаблона.
-
-    Args:
-        fields: словарь с данными для подстановки (ключи соответствуют FIELD_MAPPING).
-
-    Returns:
-        bytes — содержимое .docx файла.
-    """
+    """Сгенерировать заполненный SA DOCX. Возвращает bytes."""
     if not TEMPLATE_PATH.exists():
         raise FileNotFoundError(
             f"Шаблон Service Agreement не найден: {TEMPLATE_PATH}"
         )
 
     doc = Document(str(TEMPLATE_PATH))
-
     _replace_placeholders(doc, fields)
 
     output = BytesIO()

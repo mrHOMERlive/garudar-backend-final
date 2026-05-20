@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import String, BigInteger, Integer, CHAR, Date, DateTime, Text, Boolean, Numeric, Index, ForeignKey, JSON, event, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
-from app.enums import KYCStatus, NDAStatus, AmlCustomerType, AmlRiskLevel, AmlAlertStatus, AmlCaseStatus, AmlScreeningType
+from app.enums import KYCStatus, NDAStatus, ServiceAgreementStatus, AmlCustomerType, AmlRiskLevel, AmlAlertStatus, AmlCaseStatus, AmlScreeningType
 
 
 class Role(str, enum.Enum):
@@ -148,6 +148,12 @@ class Client(Base):
     # доступ под надзором). По умолчанию False — KYC обязателен.
     kyc_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     nda_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default=NDAStatus.NOT_STARTED.value)
+    # Service Agreement: статус последней SA-заявки клиента. Хранится здесь
+    # как зеркало для быстрых проверок (как и nda_status). Источник истины —
+    # `service_agreement_requests.status` последнего ряда per client_id.
+    service_agreement_status: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, default=ServiceAgreementStatus.NOT_STARTED.value
+    )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     account_status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
     account_hold_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -1055,6 +1061,10 @@ class NdaRequest(Base):
     partner_address_en: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     partner_signatory_ru: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     partner_signatory_en: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Title подписанта партнёра (Director / CEO / ...) — подставляется в [POINT 5.1] шаблона.
+    partner_signatory_title_en: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Страна incorporation партнёра — подставляется в [POINT 3] шаблона.
+    partner_country_en: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     partner_contact_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     partner_contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     partner_contact_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -1063,6 +1073,11 @@ class NdaRequest(Base):
     generated_file_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     generated_file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     generated_file_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # Подписанная клиентом NDA (загружается после offline-подписи).
+    signed_file_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    signed_file_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    signed_file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    signed_file_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -1106,6 +1121,70 @@ class NdaStatusHistory(Base):
     __table_args__ = (
         Index("idx_nda_history_nda", "nda_id"),
         Index("idx_nda_history_date", "changed_at"),
+    )
+
+
+# ======================================================================
+# SERVICE AGREEMENT
+# Зеркало NdaRequest / NdaStatusHistory. См. ТЗ Sec 11.
+# ======================================================================
+
+class ServiceAgreementRequest(Base):
+    __tablename__ = "service_agreement_requests"
+
+    sa_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    client_id: Mapped[str] = mapped_column(String(255), ForeignKey("clients.client_id"), nullable=False)
+    template_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, default=ServiceAgreementStatus.NOT_STARTED.value
+    )
+    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    company_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    signatory_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    signatory_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    registration_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tax_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    term: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Сгенерированный системой DOCX.
+    generated_file_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    generated_file_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    generated_file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    generated_file_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # Подписанный клиентом файл (загружается после offline-подписи).
+    signed_file_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    signed_file_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    signed_file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    signed_file_size: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_sa_request_client", "client_id"),
+        Index("idx_sa_request_status", "status"),
+    )
+
+
+class ServiceAgreementStatusHistory(Base):
+    __tablename__ = "service_agreement_status_history"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    sa_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("service_agreement_requests.sa_id"), nullable=False
+    )
+    old_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    new_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    changed_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.user_id"), nullable=True)
+    changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_sa_history_sa", "sa_id"),
+        Index("idx_sa_history_date", "changed_at"),
     )
 
 
