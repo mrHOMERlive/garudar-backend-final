@@ -167,6 +167,24 @@ When the customer chooses an off-site destination, replace the body of
 `git pull` on prod. Existing backups already created will not be uploaded
 retroactively unless you run `upload.sh` on them manually.
 
+## Notes on PostgreSQL version
+
+`install.sh` auto-detects the installed PostgreSQL server version (by scanning
+`postgresql-N` packages with `dpkg-query`) and installs the matching
+`postgresql-client-N`, so that `pg_dump` is never a different major version
+than the live server.
+
+If you later upgrade the PostgreSQL server (e.g. 16 → 17 → 18), re-run
+`install.sh` — it will detect the new version and install the corresponding
+client.
+
+The script intentionally avoids the `postgresql-client` metapackage from
+pgdg, which always resolves to the latest available client. Pinning a fixed
+version this way also prevents `apt-mark hold postgresql-client-16` from
+being silently bypassed: pgdg can install `postgresql-client-18` as a
+*different* package name, and `apt-mark` only blocks upgrades, not new
+installs.
+
 ## Troubleshooting
 
 - **`backup.sh: another instance is running`** — a previous run hasn't

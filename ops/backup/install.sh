@@ -27,9 +27,20 @@ echo "install.sh: script dir = $SCRIPT_DIR"
 
 # --- 1. apt dependencies -----------------------------------------------------
 echo
-echo "[1/6] Installing apt dependencies (age, postgresql-client, rsync)..."
+echo "[1/6] Installing apt dependencies (age, postgresql-client-N matching server, rsync)..."
 apt-get update -qq
-apt-get install -y -qq age postgresql-client rsync
+
+# Определить версию установленного PostgreSQL-сервера (если есть),
+# чтобы поставить совпадающий по версии postgresql-client-N. Метапакет
+# `postgresql-client` из pgdg-репо всегда указывает на latest — это бы
+# поставило client-18 на сервер 16 и приводило к лишним предупреждениям /
+# несовместимостям при future-апгрейдах. Авто-детект делает поведение
+# скрипта стабильным независимо от текущего «latest» в pgdg.
+PG_SERVER_VERSION=$(dpkg-query -W -f='${binary:Package}\n' 'postgresql-[0-9]*' 2>/dev/null \
+    | grep -oE 'postgresql-[0-9]+' | grep -oE '[0-9]+$' | sort -n | tail -1)
+PG_CLIENT_PACKAGE="postgresql-client-${PG_SERVER_VERSION:-16}"
+echo "    Installing $PG_CLIENT_PACKAGE (matching server v${PG_SERVER_VERSION:-16})"
+apt-get install -y -qq age "$PG_CLIENT_PACKAGE" rsync
 
 # --- 2. Directories ----------------------------------------------------------
 echo
@@ -58,8 +69,21 @@ if [ -n "$EXISTING_PUB" ]; then
     echo "    Existing public key: $EXISTING_PUB"
 else
     KEYFILE=$(mktemp --suffix=.age-key)
-    age-keygen -o "$KEYFILE" 2>/dev/null
+    # age 1.0.0 (Ubuntu jammy) при `-o` отказывается перезаписать существующий
+    # файл (mktemp его уже создал) и при этом возвращает exit code 0 — ловушка
+    # для `set -euo pipefail`. Используем stdout-режим: shell-redirect `>`
+    # truncate'ит и заполняет файл сам, обходя баг.
+    if ! age-keygen 2>/dev/null > "$KEYFILE"; then
+        echo "    age-keygen failed to generate key" >&2
+        rm -f "$KEYFILE"
+        exit 73
+    fi
     PUB=$(grep '# public key:' "$KEYFILE" | awk '{print $NF}')
+    if [ -z "$PUB" ]; then
+        echo "    age-keygen succeeded but produced no public key in $KEYFILE" >&2
+        rm -f "$KEYFILE"
+        exit 74
+    fi
 
     cat <<EOF
 
