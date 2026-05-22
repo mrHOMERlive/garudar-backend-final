@@ -39,8 +39,33 @@ apt-get update -qq
 PG_SERVER_VERSION=$(dpkg-query -W -f='${binary:Package}\n' 'postgresql-[0-9]*' 2>/dev/null \
     | grep -oE 'postgresql-[0-9]+' | grep -oE '[0-9]+$' | sort -n | tail -1)
 PG_CLIENT_PACKAGE="postgresql-client-${PG_SERVER_VERSION:-16}"
-echo "    Installing $PG_CLIENT_PACKAGE (matching server v${PG_SERVER_VERSION:-16})"
-apt-get install -y -qq age "$PG_CLIENT_PACKAGE" rsync
+echo "    Target postgres-client package: $PG_CLIENT_PACKAGE (matching server v${PG_SERVER_VERSION:-16})"
+
+# Ставим ТОЛЬКО недостающие пакеты. Это уважает `apt-mark hold` на уже
+# установленных версиях (`apt install -y` иначе пытается апгрейд и падает
+# с «Held packages were changed and -y was used without --allow-change-held-packages»).
+# Заодно делает re-run скрипта идемпотентным.
+#
+# Используем dpkg-query с явной проверкой статуса «install ok installed»,
+# чтобы НЕ принять half-configured / removed-but-config-left состояния за
+# нормально установленный пакет — такие сломанные пакеты нужно
+# переустановить, чтобы скрипт точно работал.
+is_installed() {
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'
+}
+
+MISSING_PKGS=()
+for pkg in age "$PG_CLIENT_PACKAGE" rsync; do
+    if ! is_installed "$pkg"; then
+        MISSING_PKGS+=("$pkg")
+    fi
+done
+if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
+    echo "    Installing missing packages: ${MISSING_PKGS[*]}"
+    apt-get install -y -qq "${MISSING_PKGS[@]}"
+else
+    echo "    All required packages already installed; skipping apt-get install."
+fi
 
 # --- 2. Directories ----------------------------------------------------------
 echo
