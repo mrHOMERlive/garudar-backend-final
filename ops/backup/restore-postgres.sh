@@ -50,6 +50,11 @@ trap 'rm -f "$TMP"' EXIT
 
 echo "Decrypting $BACKUP ..."
 age -d -i "$AGE_PRIVATE_KEY_FILE" -o "$TMP" "$BACKUP"
+# age пишет файл от текущего пользователя (root) с mode 0600 (umask 077).
+# `sudo -u postgres pg_restore` тогда падает с "Permission denied" при open.
+# Переназначаем ownership на postgres — mode оставляем 0600 (другие юзеры
+# всё равно не должны видеть расшифрованный дамп даже короткое время).
+chown postgres:postgres "$TMP"
 
 echo "Dropping and recreating $TARGET ..."
 sudo -u postgres dropdb --if-exists "$TARGET"

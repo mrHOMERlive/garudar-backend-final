@@ -75,6 +75,9 @@ if ! age -d -i "$AGE_PRIVATE_KEY_FILE" -o "$TMP" "$LATEST"; then
     notify "[Garudar] Restore test FAILED" "Decryption of $LATEST failed."
     exit 1
 fi
+# age пишет файл от текущего пользователя (root) с mode 0600. Без chown
+# `sudo -u postgres pg_restore` упадёт с "Permission denied" на open.
+chown postgres:postgres "$TMP"
 
 sudo -u postgres dropdb --if-exists "$TARGET_DB"
 sudo -u postgres createdb "$TARGET_DB"
