@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
-from sqlalchemy import String, BigInteger, Integer, CHAR, Date, DateTime, Text, Boolean, Numeric, Index, ForeignKey, JSON, event, func
+from sqlalchemy import String, BigInteger, Integer, CHAR, Date, DateTime, Text, Boolean, Numeric, Index, ForeignKey, JSON, event, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 from app.enums import KYCStatus, NDAStatus, ServiceAgreementStatus, AmlCustomerType, AmlRiskLevel, AmlAlertStatus, AmlCaseStatus, AmlScreeningType
@@ -961,9 +961,24 @@ class OnboardingKycProfile(Base):
     decided_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.user_id"), nullable=True)
     decision_comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # AML pre-screen (PPATK: DTTOT/DPPSPM/UN-AQ) — запускается на KYC submit ДО approve.
+    # Бесплатный локальный матч через pg_trgm, чтобы staff видел санкционные хиты
+    # до того как тратить квоту ComplyAdvantage. account_status НЕ трогается на этом
+    # этапе (account ещё не active); это чисто UI-индикатор для staff.
+    aml_local_screening_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # pending|completed|error
+    aml_local_screening_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    aml_local_match_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
+    aml_local_red_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
+
     __table_args__ = (
         Index("idx_kyc_profile_client", "client_id"),
         Index("idx_kyc_profile_status", "status"),
+        # Partial index: ускоряет фильтр Staff KYC Queue по red_flag=true (редкое значение).
+        Index(
+            "idx_kyc_profile_red_flag",
+            "aml_local_red_flag",
+            postgresql_where=text("aml_local_red_flag = true"),
+        ),
     )
 
 

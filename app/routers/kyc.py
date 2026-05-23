@@ -313,6 +313,31 @@ async def submit_kyc(
     ))
 
     await db.commit()
+
+    # AML локальный pre-screen (PPATK: DTTOT/DPPSPM/UN-AQ).
+    # Запускается inline после commit'а status=SUBMITTED — staff к моменту
+    # review'а в очереди уже видит red-flag-бейдж и санкционные хиты ДО
+    # того как тратить квоту ComplyAdvantage (CA дёргается только на approve).
+    # UI-only: account_status НЕ меняется, KYC status остаётся SUBMITTED.
+    # Любые ошибки локальной проверки не должны мешать submit'у — он уже
+    # closed-committed выше. pre_screen_kyc_on_submit сам ловит exceptions
+    # и пишет status='error' в профиль; на случай совсем неожиданного —
+    # оборачиваем здесь повторно.
+    try:
+        from app.services.aml_auto_screening import pre_screen_kyc_on_submit
+        await pre_screen_kyc_on_submit(
+            client_id=client_id,
+            db=db,
+            triggered_by=current_user.user_id,
+        )
+        await db.commit()
+    except Exception as e:
+        logger.exception(f"PPATK pre-screen упал для {client_id} после submit: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
     await db.refresh(profile)
 
     return KYCSubmitResponse(
@@ -822,7 +847,10 @@ async def get_kyc_queue(
             client_name=client.client_name,
             client_email=user.email or client.client_mail,
             submitted_at=profile.submitted_at,
-            status=profile.status
+            status=profile.status,
+            aml_local_screening_status=profile.aml_local_screening_status,
+            aml_local_match_count=profile.aml_local_match_count or 0,
+            aml_local_red_flag=bool(profile.aml_local_red_flag),
         ))
     
     return queue_items

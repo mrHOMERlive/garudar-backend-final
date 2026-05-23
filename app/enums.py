@@ -202,3 +202,4 @@ class AmlScreeningType(str, Enum):
     """Тип скрининга"""
     INITIAL = "initial"
     RESCREEN = "rescreen"
+    LOCAL_PRESCREEN = "local_prescreen"  # бесплатный PPATK-матч на KYC submit, ДО CA

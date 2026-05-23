@@ -1711,3 +1711,99 @@ async def download_screening_report(
         downloadUrl=url,
         generatedAt=screening.report_generated_at,
     )
+
+
+# ======================================================================
+# KYC Pre-screen alerts (PPATK matches found на KYC submit)
+# ======================================================================
+
+@router.get("/client/{client_id}/prescreen-alerts")
+async def get_client_prescreen_alerts(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_staff_or_admin),
+):
+    """Локальные PPATK-матчи, найденные на KYC submit (ДО approve).
+
+    Staff-only: эти данные не должны утекать клиенту (tipping-off prevention
+    по AML-регуляторике).
+
+    Возвращает агрегат:
+      - status: pending|completed|error|null — что зафиксировал последний pre-screen
+      - match_count: сколько уникальных entry_id совпали
+      - has_red_flag: есть ли хоть один high-severity матч (DTTOT/DPPSPM/UN-AQ)
+      - screened_at: timestamp последнего pre-screen
+      - matches: список с деталями каждого матча
+        ({ name, role: 'company'|'signatory'|'ubo', source_list, matched_name,
+          full_name, similarity, entry_id })
+
+    Источник данных: AmlAlert с match_type='ppatk_local' для AmlCustomer'ов
+    клиента, помеченных как pre-screen (customer_identifier IS NULL,
+    screening_result='PRESCREEN_ONLY'). После approve эти записи удаляются
+    из БД, поэтому endpoint имеет смысл вызывать пока KYC в SUBMITTED.
+    """
+    from app.models import OnboardingKycProfile
+
+    # 1. Профиль (для status / red_flag / match_count агрегатов)
+    profile = await db.scalar(
+        select(OnboardingKycProfile).where(OnboardingKycProfile.client_id == client_id)
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="KYC profile not found for this client")
+
+    # 2. Все pre-screen AmlCustomer'ы клиента (компания + подписант + UBO).
+    # Двойной фильтр гарантирует что не подхватим CA-данные.
+    customers = (await db.execute(
+        select(AmlCustomer).where(
+            AmlCustomer.client_id == client_id,
+            AmlCustomer.customer_identifier.is_(None),
+            AmlCustomer.screening_result == "PRESCREEN_ONLY",
+        )
+    )).scalars().all()
+
+    # Map id → (role, name) для быстрого лука'апа при отрисовке matches.
+    # external_identifier формата "{client_id}-prescreen-{role}":
+    #   company / signatory / ubo-<ubo_id>
+    customer_meta: dict[int, dict] = {}
+    for c in customers:
+        ext = c.external_identifier or ""
+        role = "unknown"
+        if ext.endswith("-prescreen-company"):
+            role = "company"
+        elif ext.endswith("-prescreen-signatory"):
+            role = "signatory"
+        elif "-prescreen-ubo-" in ext:
+            role = "ubo"
+        customer_meta[c.id] = {"role": role, "name": c.name}
+
+    # 3. Все локальные алерты для этих pre-screen-customer'ов
+    matches_payload: list[dict] = []
+    if customers:
+        customer_ids = [c.id for c in customers]
+        alerts = (await db.execute(
+            select(AmlAlert).where(
+                AmlAlert.aml_customer_id.in_(customer_ids),
+                AmlAlert.match_type == "ppatk_local",
+            )
+        )).scalars().all()
+
+        for a in alerts:
+            details = a.match_details or {}
+            meta = customer_meta.get(a.aml_customer_id, {"role": "unknown", "name": ""})
+            matches_payload.append({
+                "name": meta["name"],
+                "role": meta["role"],
+                "source_list": details.get("source_list"),
+                "matched_name": details.get("matched_name"),
+                "full_name": details.get("full_name"),
+                "similarity": details.get("similarity"),
+                "entry_id": details.get("entry_id"),
+            })
+
+    return {
+        "status": profile.aml_local_screening_status,
+        "match_count": profile.aml_local_match_count or 0,
+        "has_red_flag": bool(profile.aml_local_red_flag),
+        "screened_at": profile.aml_local_screening_at,
+        "matches": matches_payload,
+    }

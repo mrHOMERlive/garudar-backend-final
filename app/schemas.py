@@ -700,7 +700,7 @@ class KYCDocumentUploadResponse(BaseModel):
 class KYCQueueItemDto(BaseModel):
     """DTO для элемента очереди KYC заявок (для админа)"""
     model_config = ConfigDict(from_attributes=True)
-    
+
     profile_id: int
     client_id: str
     company_name: Optional[str] = Field(None, description="Название компании из corporate данных")
@@ -708,6 +708,11 @@ class KYCQueueItemDto(BaseModel):
     client_email: Optional[str] = Field(None, description="Email клиента")
     submitted_at: Optional[datetime] = Field(None, description="Дата отправки на проверку")
     status: str = Field(..., description="Текущий статус KYC")
+    # AML local pre-screen (PPATK) — заполняется автоматически на submit.
+    # Используется фронтом для отрисовки красного бейджа в очереди ДО открытия drawer.
+    aml_local_screening_status: Optional[str] = Field(None, description="pending|completed|error|null (не запускалось)")
+    aml_local_match_count: int = Field(0, description="Число уникальных PPATK-матчей (DTTOT/DPPSPM/UN-AQ)")
+    aml_local_red_flag: bool = Field(False, description="Есть хотя бы один high-severity PPATK-матч")
 
 
 class KYCDecisionRequest(BaseModel):
