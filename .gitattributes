@@ -1,0 +1,27 @@
+# Force LF line endings for shell scripts and Python files even when checked
+# out on Windows. Without this, Git on Windows converts LF → CRLF on checkout
+# (the default `core.autocrlf=true`), and a subsequent `git pull` on a Linux
+# host installs scripts whose shebang ends in \r — bash then fails to find
+# the interpreter (`/usr/bin/env bash\r` does not exist) and cron just sees
+# `command not found`. We had a real outage caused by this on 2026-05-24.
+#
+# `text eol=lf` tells Git to:
+#   - treat the file as text (allow normalisation)
+#   - always write LF in the working tree, on every platform
+#
+# Applies retroactively after `git add --renormalize .` is run once.
+
+*.sh        text eol=lf
+*.py        text eol=lf
+*.env.example text eol=lf
+Dockerfile* text eol=lf
+Makefile    text eol=lf
+
+# Migrations and yaml: also force LF (postgres / docker tooling chokes on CRLF).
+*.sql       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+
+# Documentation: keep platform default (LF on linux, CRLF on windows is fine).
+# *.md       text

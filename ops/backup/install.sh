@@ -25,6 +25,13 @@ fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 echo "install.sh: script dir = $SCRIPT_DIR"
 
+# Гарантируем execute-bit для всех .sh в этой папке. На Windows-машинах git
+# по умолчанию не трекает chmod на новых файлах, поэтому после `git clone`
+# или `git pull` на Linux-проде шеллы могут оказаться без `x`-флага. Без
+# этого `sudo <script>` падает с "command not found", а cron — silently
+# (произошло на прод-сервере 2026-05-24, см. ops/backup/README.md).
+chmod +x "$SCRIPT_DIR"/*.sh
+
 # --- 1. apt dependencies -----------------------------------------------------
 echo
 echo "[1/6] Installing apt dependencies (age, postgresql-client-N matching server, rsync)..."
